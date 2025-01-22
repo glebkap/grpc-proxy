@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/glebkap/grpc-proxy/test/test_service/pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 )
@@ -15,11 +16,11 @@ const (
 )
 
 // TestTestServiceServerImpl can be called to test the underlying TestServiceServer.
-func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
+func TestTestServiceServerImpl(t *testing.T, client pb.TestServiceClient) {
 	t.Run("Unary ping", func(t *testing.T) {
 		want := "hello, world"
 		hdr := metadata.MD{}
-		res, err := client.Ping(context.TODO(), &PingRequest{Value: want}, grpc.Header(&hdr))
+		res, err := client.Ping(context.TODO(), &pb.PingRequest{Value: want}, grpc.Header(&hdr))
 		if err != nil {
 			t.Errorf("want no err; got %v", err)
 			return
@@ -32,7 +33,7 @@ func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
 	})
 
 	t.Run("Error ping", func(t *testing.T) {
-		_, err := client.PingError(context.TODO(), &PingRequest{})
+		_, err := client.PingError(context.TODO(), &pb.PingRequest{})
 		if err == nil {
 			t.Errorf("want err; got %v", err)
 		}
@@ -40,7 +41,7 @@ func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
 
 	t.Run("Server streaming ping", func(t *testing.T) {
 		want := "hello, world"
-		stream, err := client.PingList(context.TODO(), &PingRequest{Value: want})
+		stream, err := client.PingStreamServer(context.TODO(), &pb.PingRequest{Value: want})
 		if err != nil {
 			t.Errorf("want no err; got %v", err)
 			if err := stream.CloseSend(); err != nil {
@@ -73,7 +74,7 @@ func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
 
 	t.Run("Bidirectional pinging", func(t *testing.T) {
 		want := "hello, world"
-		stream, err := client.PingStream(context.TODO())
+		stream, err := client.PingStreamBidirectional(context.TODO())
 		if err != nil {
 			t.Errorf("want no err; got %v", err)
 			if err := stream.CloseSend(); err != nil {
@@ -93,7 +94,7 @@ func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
 		}()
 
 		for i := 0; i < 25; i++ {
-			if err := stream.Send(&PingRequest{Value: want}); err != nil {
+			if err := stream.Send(&pb.PingRequest{Value: want}); err != nil {
 				t.Errorf("want no err; got %v", err)
 				return
 			}
@@ -118,7 +119,7 @@ func TestTestServiceServerImpl(t *testing.T, client TestServiceClient) {
 
 	t.Run("Unary ping with headers", func(t *testing.T) {
 		want := "hello, world"
-		req := &PingRequest{Value: want}
+		req := &pb.PingRequest{Value: want}
 
 		ctx := metadata.AppendToOutgoingContext(context.Background(), returnHeader, "I like turtles.")
 		inHeader := make(metadata.MD)

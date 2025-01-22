@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/glebkap/grpc-proxy/test/test_service/pb"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -26,20 +27,20 @@ const (
 
 // defaultPingServer is the canonical implementation of a TestServiceServer.
 type defaultPingServer struct {
-	UnsafeTestServiceServer
+	pb.UnsafeTestServiceServer
 }
 
-func (s defaultPingServer) PingEmpty(ctx context.Context, empty *emptypb.Empty) (*PingResponse, error) {
+func (s defaultPingServer) PingEmpty(ctx context.Context, empty *emptypb.Empty) (*pb.PingResponse, error) {
 	if err := s.sendHeader(ctx); err != nil {
 		return nil, err
 	}
 	if err := s.setTrailer(ctx); err != nil {
 		return nil, err
 	}
-	return &PingResponse{}, nil
+	return &pb.PingResponse{}, nil
 }
 
-func (s defaultPingServer) Ping(ctx context.Context, request *PingRequest) (*PingResponse, error) {
+func (s defaultPingServer) Ping(ctx context.Context, request *pb.PingRequest) (*pb.PingResponse, error) {
 	if err := s.sendHeader(ctx); err != nil {
 		return nil, err
 	}
@@ -47,10 +48,10 @@ func (s defaultPingServer) Ping(ctx context.Context, request *PingRequest) (*Pin
 		return nil, err
 	}
 
-	return &PingResponse{Value: request.Value}, nil
+	return &pb.PingResponse{Value: request.Value}, nil
 }
 
-func (s defaultPingServer) PingError(ctx context.Context, request *PingRequest) (*emptypb.Empty, error) {
+func (s defaultPingServer) PingError(ctx context.Context, request *pb.PingRequest) (*emptypb.Empty, error) {
 	if err := s.sendHeader(ctx); err != nil {
 		return nil, err
 	}
@@ -60,13 +61,13 @@ func (s defaultPingServer) PingError(ctx context.Context, request *PingRequest) 
 	return nil, status.Error(codes.Unknown, "Something is wrong and this is a message that describes it")
 }
 
-func (s defaultPingServer) PingList(request *PingRequest, server TestService_PingListServer) error {
+func (s defaultPingServer) PingStreamServer(request *pb.PingRequest, server pb.TestService_PingStreamServerServer) error {
 	if err := s.sendHeader(server.Context()); err != nil {
 		return err
 	}
 	s.setStreamTrailer(server)
 	for i := 0; i < 10; i++ {
-		if err := server.Send(&PingResponse{
+		if err := server.Send(&pb.PingResponse{
 			Value:   request.Value,
 			Counter: int32(i),
 		}); err != nil {
@@ -76,14 +77,35 @@ func (s defaultPingServer) PingList(request *PingRequest, server TestService_Pin
 	return nil
 }
 
-func (s defaultPingServer) PingStream(server TestService_PingStreamServer) error {
+func (s defaultPingServer) PingStreamClient(server pb.TestService_PingStreamClientServer) error {
+	if err := s.sendHeader(server.Context()); err != nil {
+		return err
+	}
+
+	counter := 0
+
+	for {
+		_, err := server.Recv()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return err
+		}
+		counter++
+	}
+
+	return server.SendMsg(&pb.PingResponse{Counter: int32(counter)})
+}
+
+func (s defaultPingServer) PingStreamBidirectional(server pb.TestService_PingStreamBidirectionalServer) error {
 	g, ctx := errgroup.WithContext(context.Background())
 
 	if err := s.sendHeader(server.Context()); err != nil {
 		return err
 	}
 
-	pings := make(chan *PingRequest)
+	pings := make(chan *pb.PingRequest)
 	g.Go(func() error {
 		defer close(pings)
 		for {
@@ -104,7 +126,7 @@ func (s defaultPingServer) PingStream(server TestService_PingStreamServer) error
 	g.Go(func() error {
 		var i int32
 		for m := range pings {
-			if err := server.Send(&PingResponse{
+			if err := server.Send(&pb.PingResponse{
 				Value:   m.Value,
 				Counter: i,
 			}); err != nil {
@@ -165,4 +187,4 @@ func (s defaultPingServer) setStreamTrailer(server grpc.ServerStream) {
 	server.SetTrailer(s.buildTrailer(server.Context()))
 }
 
-var _ TestServiceServer = (*defaultPingServer)(nil)
+var _ pb.TestServiceServer = (*defaultPingServer)(nil)

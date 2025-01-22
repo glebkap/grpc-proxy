@@ -11,7 +11,8 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/mwitkow/grpc-proxy/testservice"
+	testservice "github.com/glebkap/grpc-proxy/test/test_service"
+	"github.com/glebkap/grpc-proxy/test/test_service/pb"
 )
 
 var (
@@ -24,7 +25,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	testservice.RegisterTestServiceServer(srv, testservice.DefaultTestServiceServer)
+	pb.RegisterTestServiceServer(srv, testservice.DefaultTestServiceServer)
 
 	errs := make(chan error)
 

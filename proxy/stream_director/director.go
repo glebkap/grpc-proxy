@@ -1,11 +1,14 @@
 // Copyright 2017 Michal Witkowski. All Rights Reserved.
+// Copyright 2025 Gleb Kaplinskiy. All Rights Reserved.
 // See LICENSE for licensing terms.
 
-package proxy
+package streamdirector
 
 import (
 	"context"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // StreamDirector returns a gRPC ClientConn to be used to forward the call to.
@@ -22,3 +25,13 @@ import (
 //
 // See the rather rich example.
 type StreamDirector func(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error)
+
+// DefaultDirector returns a very simple forwarding StreamDirector that forwards all
+// calls.
+func DefaultDirector(cc *grpc.ClientConn) StreamDirector {
+	return func(ctx context.Context, fullMethodName string) (context.Context, *grpc.ClientConn, error) {
+		md, _ := metadata.FromIncomingContext(ctx)
+		ctx = metadata.NewOutgoingContext(ctx, md.Copy())
+		return ctx, cc, nil
+	}
+}

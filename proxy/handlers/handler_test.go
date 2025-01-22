@@ -1,7 +1,8 @@
 // Copyright 2017 Michal Witkowski. All Rights Reserved.
+// Copyright 2025 Gleb Kaplinskiy. All Rights Reserved.
 // See LICENSE for licensing terms.
 
-package proxy_test
+package handlers_test
 
 import (
 	"context"
@@ -17,13 +18,15 @@ import (
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 
-	"github.com/mwitkow/grpc-proxy/proxy"
-	pb "github.com/mwitkow/grpc-proxy/testservice"
+	"github.com/glebkap/grpc-proxy/proxy/codec"
+	"github.com/glebkap/grpc-proxy/proxy/handlers"
+	"github.com/glebkap/grpc-proxy/test/test_service/pb"
 )
 
 const (
@@ -65,7 +68,7 @@ func (s *assertingService) PingError(ctx context.Context, ping *pb.PingRequest) 
 	return nil, status.Errorf(codes.FailedPrecondition, "Userspace error.")
 }
 
-func (s *assertingService) PingList(ping *pb.PingRequest, stream pb.TestService_PingListServer) error {
+func (s *assertingService) PingStreamServer(ping *pb.PingRequest, stream pb.TestService_PingStreamServerServer) error {
 	// Send user trailers and headers.
 	stream.SendHeader(metadata.Pairs(serverHeaderMdKey, "I like turtles."))
 	for i := 0; i < countListResponses; i++ {
@@ -75,7 +78,16 @@ func (s *assertingService) PingList(ping *pb.PingRequest, stream pb.TestService_
 	return nil
 }
 
-func (s *assertingService) PingStream(stream pb.TestService_PingStreamServer) error {
+func (s *assertingService) PingStreamClient(stream pb.TestService_PingStreamClientServer) error {
+	// Send user trailers and headers.
+	stream.SendHeader(metadata.Pairs(serverHeaderMdKey, "I like turtles."))
+
+	stream.SetTrailer(metadata.Pairs(serverTrailerMdKey, "I like ending turtles."))
+	stream.SendMsg(&pb.PingResponse{Counter: 42})
+	return nil
+}
+
+func (s *assertingService) PingStreamBidirectional(stream pb.TestService_PingStreamBidirectionalServer) error {
 	stream.SendHeader(metadata.Pairs(serverHeaderMdKey, "I like turtles."))
 	counter := int32(0)
 	for {
@@ -153,7 +165,7 @@ func (s *ProxyHappySuite) TestDirectorErrorIsPropagated() {
 }
 
 func (s *ProxyHappySuite) TestPingStream_FullDuplexWorks() {
-	stream, err := s.testClient.PingStream(context.Background())
+	stream, err := s.testClient.PingStreamBidirectional(context.Background())
 	require.NoError(s.T(), err, "PingStream request should be successful.")
 
 	for i := 0; i < countListResponses; i++ {
@@ -198,7 +210,11 @@ func (s *ProxyHappySuite) SetupSuite() {
 
 	// Setup of the proxy's Director.
 	//lint:ignore SA1019 regression test
-	s.serverClientConn, err = grpc.Dial(s.serverListener.Addr().String(), grpc.WithInsecure(), grpc.WithCodec(proxy.Codec()))
+	s.serverClientConn, err = grpc.NewClient(
+		s.serverListener.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.ForceCodecV2(codec.Codec())),
+	)
 	require.NoError(s.T(), err, "must not error on deferred client Dial")
 	director := func(ctx context.Context, fullName string) (context.Context, *grpc.ClientConn, error) {
 		md, ok := metadata.FromIncomingContext(ctx)
@@ -211,15 +227,16 @@ func (s *ProxyHappySuite) SetupSuite() {
 		outCtx := metadata.NewOutgoingContext(ctx, md.Copy())
 		return outCtx, s.serverClientConn, nil
 	}
+
 	s.proxy = grpc.NewServer(
-		//lint:ignore SA1019 regression test
-		grpc.CustomCodec(proxy.Codec()),
-		grpc.UnknownServiceHandler(proxy.TransparentHandler(director)),
+		grpc.ForceServerCodecV2(codec.Codec()),
+		grpc.UnknownServiceHandler(handlers.TransparentHandler(director)),
 	)
+
 	// Ping handler is handled as an explicit registration and not as a TransparentHandler.
-	proxy.RegisterService(s.proxy, director,
-		"mwitkow.testproto.TestService",
-		"Ping")
+	handlers.RegisterService(s.proxy, director,
+		"glebkap.testproto.TestService",
+		handlers.WithMethodNames("Ping"))
 
 	// Start the serving loops.
 	s.T().Logf("starting grpc.Server at: %v", s.serverListener.Addr().String())
@@ -231,9 +248,11 @@ func (s *ProxyHappySuite) SetupSuite() {
 		s.proxy.Serve(s.proxyListener)
 	}()
 
-	dCtx, ccl := context.WithTimeout(context.Background(), time.Second)
-	defer ccl()
-	clientConn, err := grpc.DialContext(dCtx, strings.Replace(s.proxyListener.Addr().String(), "127.0.0.1", "localhost", 1), grpc.WithInsecure())
+	clientConn, err := grpc.NewClient(
+		strings.Replace(s.proxyListener.Addr().String(), "127.0.0.1", "localhost", 1),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+
 	require.NoError(s.T(), err, "must not error on deferred client Dial")
 	s.testClient = pb.NewTestServiceClient(clientConn)
 }
@@ -242,15 +261,19 @@ func (s *ProxyHappySuite) TearDownSuite() {
 	if s.client != nil {
 		s.client.Close()
 	}
+
 	if s.serverClientConn != nil {
 		s.serverClientConn.Close()
 	}
+
 	// Close all transports so the logs don't get spammy.
 	time.Sleep(10 * time.Millisecond)
+
 	if s.proxy != nil {
 		s.proxy.Stop()
 		s.proxyListener.Close()
 	}
+
 	if s.serverListener != nil {
 		s.server.Stop()
 		s.serverListener.Close()
