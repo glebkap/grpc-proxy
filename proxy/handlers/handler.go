@@ -23,7 +23,6 @@ var (
 	}
 )
 
-
 type handler struct {
 	director sd.StreamDirector
 	options  handlerOptions
@@ -42,7 +41,7 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	// We require that the director's returned context inherits from the serverStream.Context().
 	outgoingCtx, backendConn, err := s.director(serverStream.Context(), fullMethodName)
 	if err != nil {
-		return err
+		return status.Errorf(codes.Internal, "failed to get connection with context: %v", err)
 	}
 
 	clientCtx, clientCancel := context.WithCancel(outgoingCtx)
@@ -51,7 +50,7 @@ func (s *handler) handler(srv interface{}, serverStream grpc.ServerStream) error
 	// TODO(mwitkow): Add a `forwarded` header to metadata, https://en.wikipedia.org/wiki/X-Forwarded-For.
 	clientStream, err := grpc.NewClientStream(clientCtx, clientStreamDescForProxying, backendConn, fullMethodName)
 	if err != nil {
-		return err
+		return status.Errorf(codes.Internal, "failed to create client stream: %v", err)
 	}
 	// Explicitly *do not close* s2cErrChan and c2sErrChan, otherwise the select below will not terminate.
 	// Channels do not have to be closed, it is just a control flow mechanism, see
